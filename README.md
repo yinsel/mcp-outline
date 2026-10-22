@@ -133,6 +133,7 @@ Setup guides for more clients: [Docker (HTTP), Cline, Codex, Windsurf, and other
 |----------|----------|---------|-------|
 | `OUTLINE_API_KEY` | Yes* | - | Required for tool calls to succeed. For SSE/HTTP, can alternatively be provided per-request via `x-outline-api-key` header ([details](docs/configuration.md#per-user-outline-api-keys)) |
 | `OUTLINE_API_URL` | No | `https://app.getoutline.com/api` | For self-hosted: `https://your-domain/api` |
+| `OUTLINE_COOKIE` | No | - | Additional outbound `Cookie` header, e.g. `session=abc; gateway=xyz`; does not replace the API key ([details](docs/configuration.md#outbound-cookie-header)) |
 | `OUTLINE_VERIFY_SSL` | No | `true` | Set `false` for self-signed certificates |
 | `OUTLINE_READ_ONLY` | No | `false` | `true` = disable ALL write operations ([details](docs/configuration.md#read-only-mode)) |
 | `OUTLINE_DISABLE_DELETE` | No | `false` | `true` = disable only delete operations ([details](docs/configuration.md#disable-delete-operations)) |

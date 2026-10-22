@@ -2,6 +2,42 @@
 
 Detailed configuration for server permissions, tool filtering, and authentication.
 
+## Outbound Cookie Header
+
+Set `OUTLINE_COOKIE` on the MCP server to include an additional `Cookie`
+header when it calls the Outline API. This is useful when a self-hosted
+instance sits behind a gateway that requires a cookie. It works with all
+MCP transports (`stdio`, `sse`, and `streamable-http`).
+
+```bash
+export OUTLINE_API_KEY="your-outline-api-key"
+export OUTLINE_API_URL="https://outline.example.com/api"
+export OUTLINE_COOKIE="session=your_session; gateway=your_gateway_token"
+uv run mcp-outline
+```
+
+Use the complete header value without the `Cookie:` prefix. Multiple
+cookies are separated by `; `. Unset or empty values omit the configured
+cookie. Surrounding whitespace and wrapping quotes are removed; control
+characters and non-ASCII values are rejected without logging the value.
+
+The existing `Authorization: Bearer ...` header is still sent, so an Outline
+API key is still required. This is a server-wide configuration shared by
+users of that deployment, not a forwarded cookie from incoming MCP requests.
+
+The configured cookie is kept on redirects within the same origin (scheme,
+host, and port), and is removed when redirects lead elsewhere, including
+attachment storage. It is not added to the shared HTTP client's cookie jar.
+
+For Docker, pass `-e OUTLINE_COOKIE="session=your_session"` or use
+`--env-file`. The repository's Docker Compose service also reads
+`OUTLINE_COOKIE` from the shell or project `.env` file. Rebuild and recreate
+the MCP service after updating the source or environment:
+
+```bash
+docker compose up -d --build mcp-outline
+```
+
 ## Read-Only Mode
 
 Set `OUTLINE_READ_ONLY=true` to enable viewer-only access. Only search, read, export, and collaboration viewing tools are available. All write operations (create, update, move, archive, delete) are disabled.

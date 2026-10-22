@@ -348,6 +348,7 @@ OUTLINE_API_KEY=<your_key>
 
 # Outline API (optional)
 OUTLINE_API_URL=<custom_url>               # Default: https://app.getoutline.com/api
+OUTLINE_COOKIE="session=abc; gateway=xyz"  # Optional outbound Cookie header
 OUTLINE_VERIFY_SSL=true                    # Default: true (set false for self-signed certs)
 
 # Connection pooling (optional)

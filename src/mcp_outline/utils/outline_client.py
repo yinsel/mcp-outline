@@ -57,6 +57,29 @@ def _sanitize_value(value: Optional[str]) -> Optional[str]:
     return sanitized
 
 
+def _origin(url: httpx.URL) -> Tuple[str, str, Optional[int]]:
+    """Return the normalized scheme, host, and port for a URL."""
+    return url.scheme, url.host, url.port
+
+
+async def _apply_outline_cookie(request: httpx.Request) -> None:
+    """Keep the configured cookie on its original origin during redirects.
+
+    HTTPX rebuilds Cookie from its cookie jar on redirects. Keep this
+    deployment-specific cookie in request extensions instead of the shared
+    jar so it cannot leak to another client, host, port, or protocol.
+    """
+    cookie_config = request.extensions.get("outline_cookie")
+    if cookie_config is None:
+        return
+
+    cookie, origin = cookie_config
+    if _origin(request.url) == origin:
+        request.headers["Cookie"] = cookie
+    else:
+        request.headers.pop("Cookie", None)
+
+
 T = TypeVar("T")
 
 
@@ -128,7 +151,7 @@ class OutlineClient:
             api_url: Outline API URL or from OUTLINE_API_URL env var.
 
         Raises:
-            OutlineError: If API key is missing.
+            OutlineError: If API key is missing or OUTLINE_COOKIE is invalid.
         """
         # Load and sanitize values from arguments or environment
         raw_api_key = api_key or os.getenv("OUTLINE_API_KEY")
@@ -162,6 +185,15 @@ class OutlineClient:
                 "Get your key from Outline "
                 "(Settings > API)."
             )
+
+        raw_cookie = os.getenv("OUTLINE_COOKIE")
+        if raw_cookie and any(
+            ord(char) < 32 or ord(char) > 126 for char in raw_cookie
+        ):
+            raise OutlineError(
+                "OUTLINE_COOKIE must contain only printable ASCII characters"
+            )
+        self.cookie = (_sanitize_value(raw_cookie) or "").strip() or None
 
         # Rate limit tracking
         self._rate_limit_remaining: Optional[int] = None
@@ -201,6 +233,7 @@ class OutlineClient:
                 timeout=timeout_config,
                 follow_redirects=True,
                 verify=verify_ssl,
+                event_hooks={"request": [_apply_outline_cookie]},
             )
 
     async def __aenter__(self):
@@ -305,6 +338,13 @@ class OutlineClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        extensions: Dict[str, Any] = {}
+        if self.cookie:
+            headers["Cookie"] = self.cookie
+            extensions["outline_cookie"] = (
+                self.cookie,
+                _origin(httpx.URL(self.api_url)),
+            )
 
         if self._client_pool is None:
             raise OutlineError("Client pool not initialized")
@@ -320,6 +360,7 @@ class OutlineClient:
                     headers=headers,
                     json=json,
                     follow_redirects=follow_redirects,
+                    extensions=extensions,
                 )
 
                 # Update rate limit state from response headers

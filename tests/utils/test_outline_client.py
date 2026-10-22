@@ -2,6 +2,7 @@
 Tests for the Outline API client.
 """
 
+import asyncio
 import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,10 +27,12 @@ class TestOutlineClient:
         self.original_api_url = os.environ.get("OUTLINE_API_URL")
         self.original_write_timeout = os.environ.get("OUTLINE_WRITE_TIMEOUT")
         self.original_verify_ssl = os.environ.get("OUTLINE_VERIFY_SSL")
+        self.original_cookie = os.environ.get("OUTLINE_COOKIE")
 
         # Set test environment variables
         os.environ["OUTLINE_API_KEY"] = MOCK_API_KEY
         os.environ["OUTLINE_API_URL"] = MOCK_API_URL
+        os.environ.pop("OUTLINE_COOKIE", None)
 
     def teardown_method(self):
         """Restore original environment."""
@@ -54,6 +57,11 @@ class TestOutlineClient:
         else:
             os.environ.pop("OUTLINE_VERIFY_SSL", None)
 
+        if self.original_cookie is not None:
+            os.environ["OUTLINE_COOKIE"] = self.original_cookie
+        else:
+            os.environ.pop("OUTLINE_COOKIE", None)
+
     @pytest.fixture(autouse=True)
     def _cleanup_client_pool(self):
         """Ensure no real httpx.AsyncClient is created by default.
@@ -67,6 +75,22 @@ class TestOutlineClient:
             OutlineClient._client_pool = MagicMock()
         yield
         OutlineClient._client_pool = MagicMock()
+
+    @pytest.fixture
+    def mock_transport(self, monkeypatch):
+        """Use real HTTPX request/redirect handling without network access."""
+        real_client = httpx.AsyncClient
+
+        def install(handler):
+            def create_client(**kwargs):
+                return real_client(
+                    transport=httpx.MockTransport(handler), **kwargs
+                )
+
+            monkeypatch.setattr(httpx, "AsyncClient", create_client)
+            OutlineClient._client_pool = None
+
+        return install
 
     @pytest.mark.asyncio
     async def test_init_from_env_variables(self):
@@ -134,9 +158,166 @@ class TestOutlineClient:
                 },
                 json=data,
                 follow_redirects=True,
+                extensions={},
             )
 
             assert result == {"data": {"test": "value"}}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cookie", [None, "", "   ", '""', "''"])
+    async def test_post_omits_unconfigured_cookie(
+        self, mock_transport, cookie
+    ):
+        """Unset or empty cookies do not introduce a Cookie header."""
+        if cookie is not None:
+            os.environ["OUTLINE_COOKIE"] = cookie
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"data": {}})
+
+        mock_transport(handler)
+        client = OutlineClient()
+        try:
+            await client.post("auth.info")
+            assert "cookie" not in requests[0].headers
+        finally:
+            await OutlineClient.close_pool()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cookie",
+        [
+            'session=abc==; gateway="token"',
+            "  'session=abc==; gateway=\"token\"'  ",
+        ],
+    )
+    async def test_post_sends_cookie_on_retry(self, mock_transport, cookie):
+        """Keep the complete Cookie and Bearer auth when retrying a request."""
+        os.environ["OUTLINE_COOKIE"] = cookie
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"})
+            return httpx.Response(200, json={"data": {}})
+
+        mock_transport(handler)
+        client = OutlineClient()
+        try:
+            await client.post("auth.info")
+            assert len(requests) == 2
+            for request in requests:
+                assert request.headers["Cookie"] == (
+                    'session=abc==; gateway="token"'
+                )
+                assert request.headers["Authorization"] == (
+                    f"Bearer {MOCK_API_KEY}"
+                )
+            assert "cookie" not in client._client_pool.headers
+            assert not client._client_pool.cookies
+        finally:
+            await OutlineClient.close_pool()
+
+    @pytest.mark.parametrize(
+        "cookie",
+        [
+            "session=secret\r\nX-Injected: value",
+            "session=secret\n",
+            "session=secret\x7f",
+            "session=secret\t",
+            "session=secret\u00e9",
+        ],
+    )
+    def test_init_rejects_invalid_cookie_without_exposing_value(self, cookie):
+        """Reject malformed headers without echoing credentials in errors."""
+        os.environ["OUTLINE_COOKIE"] = cookie
+        with pytest.raises(OutlineError, match="OUTLINE_COOKIE") as exc_info:
+            OutlineClient()
+        assert "secret" not in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_cookie_isolated_between_clients(self, mock_transport):
+        """Clients sharing the pool retain their own cookie and API key."""
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(200, json={"data": {}})
+
+        mock_transport(handler)
+        os.environ["OUTLINE_COOKIE"] = "session=first"
+        first = OutlineClient(api_key="first-key")
+        os.environ["OUTLINE_COOKIE"] = "session=second"
+        second = OutlineClient(
+            api_key="second-key", api_url="https://another.outline.com/api"
+        )
+        os.environ.pop("OUTLINE_COOKIE")
+        third = OutlineClient(api_key="third-key")
+        try:
+            await asyncio.gather(
+                first.post("auth.info"),
+                second.post("auth.info"),
+                third.post("auth.info"),
+            )
+            assert {
+                request.headers["Authorization"]: request.headers.get("Cookie")
+                for request in requests
+            } == {
+                "Bearer first-key": "session=first",
+                "Bearer second-key": "session=second",
+                "Bearer third-key": None,
+            }
+        finally:
+            await OutlineClient.close_pool()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "location,send_cookie",
+        [
+            ("/download/file", True),
+            ("https://test.outline.com:443/download/file", True),
+            ("https://storage.example.com/file", False),
+            ("https://files.test.outline.com/file", False),
+            ("https://test.outline.com:8443/file", False),
+            ("http://test.outline.com/file", False),
+        ],
+    )
+    async def test_attachment_cookie_scoped_to_origin(
+        self, mock_transport, location, send_cookie
+    ):
+        """Redirects keep the configured cookie only on the original origin."""
+        os.environ["OUTLINE_COOKIE"] = "session=secret; gateway=token"
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(
+                    302,
+                    headers={
+                        "Location": location,
+                        "Set-Cookie": "session=server-cookie; Path=/",
+                    },
+                )
+            return httpx.Response(200, content=b"attachment")
+
+        mock_transport(handler)
+        client = OutlineClient()
+        try:
+            content, _ = await client.fetch_attachment_content("attachment-id")
+            assert content == b"attachment"
+            assert len(requests) == 2
+            assert requests[0].headers["Cookie"] == (
+                "session=secret; gateway=token"
+            )
+            assert requests[1].headers.get("Cookie") == (
+                "session=secret; gateway=token" if send_cookie else None
+            )
+        finally:
+            await OutlineClient.close_pool()
 
     @pytest.mark.asyncio
     async def test_error_handling(self):
