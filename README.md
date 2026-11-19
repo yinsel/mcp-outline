@@ -23,6 +23,7 @@ A Model Context Protocol server for interacting with Outline document management
 - **Collections**: List, create, manage document hierarchies
 - **Comments**: Add and view threaded comments
 - **Backlinks**: Find documents referencing a specific document
+- **Attachments**: List, download, and upload document attachments
 - **MCP Resources**: Direct content access via URIs (outline://document/{id}, outline://collection/{id}, etc.)
 - **Automatic rate limiting**: Transparent handling of API limits with retry logic
 
@@ -181,6 +182,12 @@ Read-only mode takes precedence over disable-delete. See [Configuration Guide](d
 ### Document Navigation
 - `get_document_toc(document_id)` - Get table of contents with heading structure and line numbers
 - `read_document_section(document_id, heading)` - Read a specific section by heading match (case-insensitive substring)
+
+### Attachments
+- `list_document_attachments(document_id)` - List attachment IDs referenced in a document
+- `get_attachment_url(attachment_id)` - Resolve an attachment ID to a signed download URL
+- `fetch_attachment(attachment_id)` - Fetch attachment content as Base64
+- `upload_attachment(file_path, document_id?, content_type?)` - Upload a local file and return its attachment ID, URL, and Markdown link (disabled in read-only mode)
 
 ### Document Management
 - `create_document(title, collection_id, text?, parent_document_id?, publish?)` - Create new document

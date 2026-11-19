@@ -345,6 +345,9 @@ class TestRoleBlockedMap:
         assert "get_attachment_url" not in _ROLE_MAP["viewer"]
         assert "fetch_attachment" not in _ROLE_MAP["viewer"]
 
+    def test_viewer_cannot_upload_attachment(self):
+        assert "upload_attachment" in _ROLE_MAP["viewer"]
+
     def test_member_cannot_export_all(self):
         """export_all_collections requires admin."""
         assert "export_all_collections" in _ROLE_MAP["member"]

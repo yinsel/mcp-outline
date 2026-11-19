@@ -121,6 +121,7 @@ async def test_read_only_mode_disables_write_tools(fresh_mcp_server):
         assert "delete_document" not in tool_names
         assert "move_document" not in tool_names
         assert "batch_archive_documents" not in tool_names
+        assert "upload_attachment" not in tool_names
 
         # Verify read tools ARE registered
         assert "search_documents" in tool_names
@@ -128,6 +129,18 @@ async def test_read_only_mode_disables_write_tools(fresh_mcp_server):
         assert "list_document_comments" in tool_names
         assert "export_collection" in tool_names
         assert "ask_ai_about_documents" in tool_names
+
+
+@pytest.mark.anyio
+async def test_upload_attachment_registered_by_default(fresh_mcp_server):
+    """The upload tool is available unless read-only mode is enabled."""
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("OUTLINE_READ_ONLY", None)
+        register_all(fresh_mcp_server)
+        tools = await fresh_mcp_server.list_tools()
+        tool_names = [tool.name for tool in tools]
+
+        assert "upload_attachment" in tool_names
 
 
 @pytest.mark.anyio
@@ -166,6 +179,7 @@ async def test_disable_delete_blocks_deletes_only(fresh_mcp_server):
         assert "archive_document" in tool_names
         assert "create_collection" in tool_names
         assert "update_collection" in tool_names
+        assert "upload_attachment" in tool_names
 
 
 @pytest.mark.anyio
@@ -217,6 +231,7 @@ async def test_both_flags_together(fresh_mcp_server):
         assert "delete_document" not in tool_names
         assert "move_document" not in tool_names
         assert "batch_archive_documents" not in tool_names
+        assert "upload_attachment" not in tool_names
 
         # Verify read tools ARE registered
         assert "search_documents" in tool_names

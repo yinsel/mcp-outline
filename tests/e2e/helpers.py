@@ -11,7 +11,7 @@ Provides two categories of utilities:
 
 ``_upload_attachment`` bypasses MCP entirely and calls the Outline REST
 API directly — this lets attachment tests seed real uploaded files
-without depending on a (non-existent) MCP upload tool.
+independently of the MCP upload tool.
 """
 
 import re

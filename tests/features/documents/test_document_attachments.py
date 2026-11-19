@@ -271,3 +271,111 @@ class TestDocumentAttachmentTools:
 
         assert "Error" in result
         assert "Not found" in result
+
+    @pytest.mark.asyncio
+    @patch(
+        "mcp_outline.features.documents.document_attachments.get_outline_client"
+    )
+    async def test_upload_attachment_success(
+        self, mock_get_client, register_attachment_tools, tmp_path
+    ):
+        """Upload a local file and return its ID, URL, and Markdown link."""
+        file_path = tmp_path / "report.csv"
+        file_path.write_bytes(b"name,value\nalpha,1\n")
+
+        mock_client = AsyncMock()
+        mock_client.upload_attachment.return_value = {
+            "id": "att-123",
+            "name": "report.csv",
+            "url": (
+                "https://outline.example/api/attachments.redirect?id=att-123"
+            ),
+        }
+        mock_get_client.return_value = mock_client
+
+        result = await register_attachment_tools.tools["upload_attachment"](
+            str(file_path)
+        )
+
+        mock_client.upload_attachment.assert_awaited_once_with(
+            "report.csv",
+            b"name,value\nalpha,1\n",
+            "text/csv",
+            None,
+        )
+        assert "Attachment uploaded successfully" in result
+        assert "Attachment ID: att-123" in result
+        assert "https://outline.example/api/attachments.redirect" in result
+        assert "[report.csv](" in result
+
+    @pytest.mark.asyncio
+    @patch(
+        "mcp_outline.features.documents.document_attachments.get_outline_client"
+    )
+    async def test_upload_attachment_forwards_optional_arguments(
+        self, mock_get_client, register_attachment_tools, tmp_path
+    ):
+        """Document ID and explicit content type are forwarded."""
+        file_path = tmp_path / "data.bin"
+        file_path.write_bytes(b"\x00\x01")
+
+        mock_client = AsyncMock()
+        mock_client.upload_attachment.return_value = {
+            "id": "att-456",
+            "name": "data.bin",
+            "url": "https://outline.example/api/attachments.redirect"
+            "?id=att-456",
+        }
+        mock_get_client.return_value = mock_client
+
+        await register_attachment_tools.tools["upload_attachment"](
+            str(file_path),
+            document_id="doc-123",
+            content_type="application/x-custom",
+        )
+
+        mock_client.upload_attachment.assert_awaited_once_with(
+            "data.bin",
+            b"\x00\x01",
+            "application/x-custom",
+            "doc-123",
+        )
+
+    @pytest.mark.asyncio
+    @patch(
+        "mcp_outline.features.documents.document_attachments.get_outline_client"
+    )
+    async def test_upload_attachment_missing_file(
+        self, mock_get_client, register_attachment_tools, tmp_path
+    ):
+        """A missing path returns an error without calling Outline."""
+        result = await register_attachment_tools.tools["upload_attachment"](
+            str(tmp_path / "missing.txt")
+        )
+
+        assert "File not found" in result
+        mock_get_client.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch(
+        "mcp_outline.features.documents.document_attachments.get_outline_client"
+    )
+    async def test_upload_attachment_client_error(
+        self, mock_get_client, register_attachment_tools, tmp_path
+    ):
+        """Outline errors are returned as readable tool errors."""
+        file_path = tmp_path / "file.txt"
+        file_path.write_bytes(b"data")
+
+        mock_client = AsyncMock()
+        mock_client.upload_attachment.side_effect = OutlineClientError(
+            "permission denied"
+        )
+        mock_get_client.return_value = mock_client
+
+        result = await register_attachment_tools.tools["upload_attachment"](
+            str(file_path)
+        )
+
+        assert "Error uploading attachment" in result
+        assert "permission denied" in result

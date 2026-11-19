@@ -6,8 +6,11 @@ This module provides MCP tools for fetching and discovering attachments
 """
 
 import base64
+import mimetypes
+import os
 import re
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 from mcp.types import ToolAnnotations
 
@@ -22,6 +25,25 @@ ATTACHMENT_PATTERN = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
+
+_CONTENT_TYPE_OVERRIDES = {
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+}
+
+
+def _guess_content_type(filename: str) -> str:
+    """Guess a file's MIME type with stable common text mappings."""
+    suffix = Path(filename).suffix.lower()
+    return (
+        _CONTENT_TYPE_OVERRIDES.get(suffix)
+        or mimetypes.guess_type(filename)[0]
+        or "application/octet-stream"
+    )
 
 
 def _parse_attachment_ids(text: str) -> List[Tuple[str, str]]:
@@ -202,3 +224,87 @@ def register_tools(mcp) -> None:
             return f"Error: {str(e)}"
         except Exception as e:
             return f"Unexpected error: {str(e)}"
+
+    read_only = os.getenv("OUTLINE_READ_ONLY", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+
+    if not read_only:
+
+        @mcp.tool(
+            annotations=ToolAnnotations(
+                read_only_hint=False,
+                destructive_hint=False,
+                idempotent_hint=False,
+            ),
+            meta={
+                "endpoint": "attachments.create",
+                "min_role": "member",
+            },
+        )
+        async def upload_attachment(
+            file_path: str,
+            document_id: Optional[str] = None,
+            content_type: Optional[str] = None,
+        ) -> str:
+            """
+            Upload a local file to Outline and return its attachment link.
+
+            Reads the file at ``file_path``, creates an attachment record,
+            and uploads the bytes using the presigned mode returned by
+            Outline (POST form or PUT). The MIME type is inferred from the
+            filename unless ``content_type`` is provided.
+
+            Use this tool when you need to:
+            - Upload a file from the local filesystem to Outline
+            - Get an attachment ID and link for use in a document
+            - Attach an image, PDF, or other file to a document
+
+            Args:
+                file_path: Path to the local file to upload.
+                document_id: Optional document to attach the file to.
+                content_type: Optional MIME type override, such as
+                    "application/pdf" or "image/png".
+
+            Returns:
+                Attachment ID, stable URL, and Markdown link.
+            """
+            try:
+                path = Path(file_path).expanduser()
+                if not path.is_file():
+                    return f"Error: File not found: {file_path}"
+
+                content = path.read_bytes()
+                resolved_content_type = content_type or _guess_content_type(
+                    path.name
+                )
+
+                client = await get_outline_client()
+                attachment = await client.upload_attachment(
+                    path.name,
+                    content,
+                    resolved_content_type,
+                    document_id,
+                )
+
+                attachment_id = attachment.get("id", "unknown")
+                name = attachment.get("name", path.name)
+                url = attachment.get("url") or (
+                    f"{client.api_url}/attachments.redirect?id={attachment_id}"
+                )
+
+                return (
+                    "Attachment uploaded successfully.\n"
+                    f"Name: {name}\n"
+                    f"Attachment ID: {attachment_id}\n"
+                    f"URL: {url}\n"
+                    f"Markdown: [{name}]({url})"
+                )
+            except OutlineClientError as e:
+                return f"Error uploading attachment: {str(e)}"
+            except OSError as e:
+                return f"Error reading file: {str(e)}"
+            except Exception as e:
+                return f"Unexpected error: {str(e)}"

@@ -50,6 +50,7 @@ Set `OUTLINE_READ_ONLY=true` to enable viewer-only access. Only search, read, ex
 **Available tools in read-only mode:**
 - Search & Discovery: `search_documents`, `list_collections`, `get_collection_structure`, `get_document_id_from_title`
 - Document Reading: `read_document`, `export_document`
+- Attachments: `list_document_attachments`, `get_attachment_url`, `fetch_attachment`
 - Comments: `list_document_comments`, `get_comment`
 - Collaboration: `get_document_backlinks`
 - Collections: `export_collection`, `export_all_collections`

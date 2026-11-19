@@ -19,7 +19,7 @@ This MCP server bridges AI assistants with Outline's document management platfor
 - **Search**: Find documents, collections, hierarchies
 - **Reading**: Read content (with pagination), TOC, section reading, in-document search (grep-style), export markdown
 - **Editing**: String-match editing with optional staging
-- **Attachments**: Resolve URLs, fetch content, list attachments
+- **Attachments**: Resolve URLs, fetch content, list and upload attachments
 - **Content**: Create, update, comment (supports templates)
 - **Organization**: Move documents between collections
 - **Lifecycle**: Archive, delete, restore operations
@@ -37,7 +37,7 @@ register_all(mcp)
   |   |- document_search.register_tools()      # Always (recent-changes tool: if not OUTLINE_DISABLE_RECENT_DOCUMENTS)
   |   |- document_reading.register_tools()     # Always
   |   |- document_navigation.register_tools()  # Always
-  |   |- document_attachments.register_tools() # Always
+  |   |- document_attachments.register_tools() # Always (upload: if not OUTLINE_READ_ONLY)
   |   |- document_collaboration.register_tools() # Always
   |   |- collection_tools.register_tools()     # Always (exports always, writes conditional)
   |   |- ai_tools.register_tools()             # If not OUTLINE_DISABLE_AI_TOOLS
@@ -95,7 +95,7 @@ parameters, update the agent, the skill, and the server instructions
 - Documents: get, search, list, create, update, move, archive, unarchive, delete, restore
 - Collections: list, get, get_documents, create, update, delete, export, export_all
 - Comments: create, list, get
-- Attachments: get_redirect_url, fetch_content
+- Attachments: get_redirect_url, fetch_content, upload
 - AI: answer questions
 - API Keys: list_api_keys (scope introspection for dynamic tool list)
 

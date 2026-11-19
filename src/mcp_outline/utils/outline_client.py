@@ -19,6 +19,7 @@ from typing import (
     Tuple,
     TypeVar,
 )
+from urllib.parse import urljoin
 
 import httpx
 
@@ -880,3 +881,99 @@ class OutlineClient:
             follow_redirects=True,
             parse=_parse_attachment_content,
         )
+
+    async def upload_attachment(
+        self,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        document_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Upload a file attachment and return its metadata.
+
+        Outline's ``attachments.create`` returns either a presigned POST
+        target or a presigned PUT target. This method detects the mode
+        from the response and performs the corresponding upload.
+
+        Args:
+            filename: Name to store for the attachment.
+            content: Raw file bytes.
+            content_type: MIME type of the file.
+            document_id: Optional document to attach the file to.
+
+        Returns:
+            Attachment metadata with an absolute ``url`` field.
+
+        Raises:
+            OutlineError: If creating or uploading the attachment fails.
+        """
+        payload: Dict[str, Any] = {
+            "name": filename,
+            "contentType": content_type,
+            "size": len(content),
+        }
+        if document_id:
+            payload["documentId"] = document_id
+
+        response = await self.post("attachments.create", payload)
+        data = response.get("data", {})
+        attachment = data.get("attachment", {})
+        attachment_id = attachment.get("id")
+        if not attachment_id:
+            raise OutlineError(
+                "attachments.create did not return an attachment ID"
+            )
+
+        mode = data.get("mode", "post")
+        upload_url = (
+            data.get("url") if mode == "put" else data.get("uploadUrl")
+        )
+        if not upload_url:
+            raise OutlineError(
+                "attachments.create did not return an upload URL"
+            )
+        upload_url = urljoin(self.api_url, upload_url)
+
+        if self._client_pool is None:
+            raise OutlineError("Client pool not initialized")
+
+        try:
+            if mode == "put":
+                upload_response = await self._client_pool.put(
+                    upload_url,
+                    headers=data.get("headers") or {},
+                    content=content,
+                    follow_redirects=False,
+                )
+            else:
+                upload_response = await self._client_pool.post(
+                    upload_url,
+                    data=data.get("form") or {},
+                    files={
+                        "file": (filename, content, content_type),
+                    },
+                    follow_redirects=False,
+                )
+            upload_response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            raise OutlineError(
+                f"Attachment upload failed: HTTP {status}: "
+                f"{exc.response.text}",
+                status_code=status,
+            ) from exc
+        except (httpx.TimeoutException, httpx.RequestError) as exc:
+            raise OutlineError(
+                f"Attachment upload failed: {str(exc)}"
+            ) from exc
+
+        return {
+            **attachment,
+            "name": attachment.get("name") or filename,
+            "url": urljoin(
+                self.api_url + "/",
+                attachment.get("url")
+                or f"attachments.redirect?id={attachment_id}",
+            ),
+        }

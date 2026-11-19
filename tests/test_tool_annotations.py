@@ -99,6 +99,7 @@ async def test_non_destructive_write_tools(fresh_mcp_server):
         "create_document",
         "add_comment",
         "create_collection",
+        "upload_attachment",
         "unarchive_document",
         "restore_document",
     ]

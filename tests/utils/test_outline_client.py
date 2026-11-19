@@ -925,6 +925,223 @@ class TestOutlineClient:
             assert content_type == "application/pdf"
 
     @pytest.mark.asyncio
+    async def test_upload_attachment_post_success(self):
+        """Upload uses presigned POST fields and returns an absolute URL."""
+        client = OutlineClient()
+        attachment_id = "6fe06f93-e331-408d-b954-6bb4ed50e67d"
+
+        create_response = {
+            "data": {
+                "mode": "post",
+                "uploadUrl": "/api/attachments.upload",
+                "form": {"key": "uploads/file.txt", "policy": "abc"},
+                "attachment": {
+                    "id": attachment_id,
+                    "name": "file.txt",
+                    "url": f"/api/attachments.redirect?id={attachment_id}",
+                },
+            }
+        }
+        upload_response = MagicMock()
+        upload_response.raise_for_status = MagicMock()
+
+        with (
+            patch.object(
+                client,
+                "post",
+                new=AsyncMock(return_value=create_response),
+            ) as mock_create,
+            patch.object(
+                client._client_pool,
+                "post",
+                new=AsyncMock(return_value=upload_response),
+            ) as mock_upload,
+        ):
+            result = await client.upload_attachment(
+                "file.txt",
+                b"hello",
+                "text/plain",
+                "doc-123",
+            )
+
+        mock_create.assert_awaited_once_with(
+            "attachments.create",
+            {
+                "name": "file.txt",
+                "contentType": "text/plain",
+                "size": 5,
+                "documentId": "doc-123",
+            },
+        )
+        mock_upload.assert_awaited_once_with(
+            "https://test.outline.com/api/attachments.upload",
+            data={"key": "uploads/file.txt", "policy": "abc"},
+            files={"file": ("file.txt", b"hello", "text/plain")},
+            follow_redirects=False,
+        )
+        assert result["id"] == attachment_id
+        assert result["url"] == (
+            "https://test.outline.com/api/attachments.redirect"
+            f"?id={attachment_id}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_upload_attachment_post_omits_document_id(self):
+        """A missing document ID is not sent to attachments.create."""
+        client = OutlineClient()
+        create_response = {
+            "data": {
+                "mode": "post",
+                "uploadUrl": "https://storage.example.com/upload",
+                "form": {"key": "file"},
+                "attachment": {
+                    "id": "att-1",
+                    "name": "file.bin",
+                    "url": "https://outline.example/api/attachments.redirect"
+                    "?id=att-1",
+                },
+            }
+        }
+        upload_response = MagicMock()
+        upload_response.raise_for_status = MagicMock()
+
+        with (
+            patch.object(
+                client,
+                "post",
+                new=AsyncMock(return_value=create_response),
+            ) as mock_create,
+            patch.object(
+                client._client_pool,
+                "post",
+                new=AsyncMock(return_value=upload_response),
+            ),
+        ):
+            await client.upload_attachment(
+                "file.bin", b"data", "application/octet-stream"
+            )
+
+        payload = mock_create.call_args.args[1]
+        assert "documentId" not in payload
+
+    @pytest.mark.asyncio
+    async def test_upload_attachment_put_success(self):
+        """Upload follows the presigned PUT mode when returned."""
+        client = OutlineClient()
+        create_response = {
+            "data": {
+                "mode": "put",
+                "url": "https://storage.example.com/presigned",
+                "headers": {
+                    "Content-Type": "text/plain",
+                    "x-amz-acl": "private",
+                },
+                "attachment": {
+                    "id": "att-put",
+                    "name": "note.txt",
+                    "url": "/api/attachments.redirect?id=att-put",
+                },
+            }
+        }
+        upload_response = MagicMock()
+        upload_response.raise_for_status = MagicMock()
+
+        with (
+            patch.object(
+                client,
+                "post",
+                new=AsyncMock(return_value=create_response),
+            ),
+            patch.object(
+                client._client_pool,
+                "put",
+                new=AsyncMock(return_value=upload_response),
+            ) as mock_put,
+        ):
+            result = await client.upload_attachment(
+                "note.txt", b"note", "text/plain"
+            )
+
+        mock_put.assert_awaited_once_with(
+            "https://storage.example.com/presigned",
+            headers={
+                "Content-Type": "text/plain",
+                "x-amz-acl": "private",
+            },
+            content=b"note",
+            follow_redirects=False,
+        )
+        assert result["id"] == "att-put"
+
+    @pytest.mark.asyncio
+    async def test_upload_attachment_missing_attachment_id(self):
+        """A create response without an attachment ID is rejected."""
+        client = OutlineClient()
+        client.post = AsyncMock(
+            return_value={
+                "data": {
+                    "mode": "post",
+                    "uploadUrl": "https://storage.example.com/upload",
+                }
+            }
+        )
+
+        with pytest.raises(OutlineError, match="attachment ID"):
+            await client.upload_attachment("file.txt", b"x", "text/plain")
+
+    @pytest.mark.asyncio
+    async def test_upload_attachment_missing_upload_url(self):
+        """A create response without an upload target is rejected."""
+        client = OutlineClient()
+        client.post = AsyncMock(
+            return_value={
+                "data": {
+                    "mode": "post",
+                    "attachment": {"id": "att-1"},
+                }
+            }
+        )
+
+        with pytest.raises(OutlineError, match="upload URL"):
+            await client.upload_attachment("file.txt", b"x", "text/plain")
+
+    @pytest.mark.asyncio
+    async def test_upload_attachment_http_error(self):
+        """Storage upload errors are mapped to OutlineError."""
+        client = OutlineClient()
+        client.post = AsyncMock(
+            return_value={
+                "data": {
+                    "mode": "post",
+                    "uploadUrl": "https://storage.example.com/upload",
+                    "form": {},
+                    "attachment": {"id": "att-1"},
+                }
+            }
+        )
+
+        upload_response = MagicMock()
+        upload_response.status_code = 403
+        upload_response.text = "Forbidden"
+        upload_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Forbidden",
+            request=MagicMock(),
+            response=upload_response,
+        )
+
+        with patch.object(
+            client._client_pool,
+            "post",
+            new=AsyncMock(return_value=upload_response),
+        ):
+            with pytest.raises(OutlineError) as exc_info:
+                await client.upload_attachment("file.txt", b"x", "text/plain")
+
+        assert exc_info.value.status_code == 403
+        assert "Attachment upload failed" in str(exc_info.value)
+        assert "Forbidden" in str(exc_info.value)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "input_url,expected",
         [
