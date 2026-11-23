@@ -938,17 +938,25 @@ class OutlineClient:
         if self._client_pool is None:
             raise OutlineError("Client pool not initialized")
 
+        presigned_headers = data.get("headers") if mode == "put" else None
+        upload_headers = httpx.Headers(presigned_headers or {})
+        if self.cookie and _origin(httpx.URL(upload_url)) == _origin(
+            httpx.URL(self.api_url)
+        ):
+            upload_headers["Cookie"] = self.cookie
+
         try:
             if mode == "put":
                 upload_response = await self._client_pool.put(
                     upload_url,
-                    headers=data.get("headers") or {},
+                    headers=upload_headers,
                     content=content,
                     follow_redirects=False,
                 )
             else:
                 upload_response = await self._client_pool.post(
                     upload_url,
+                    headers=upload_headers,
                     data=data.get("form") or {},
                     files={
                         "file": (filename, content, content_type),

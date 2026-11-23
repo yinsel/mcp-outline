@@ -925,6 +925,57 @@ class TestOutlineClient:
             assert content_type == "application/pdf"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["post", "put"])
+    @pytest.mark.parametrize(
+        "upload_url,send_cookie",
+        [
+            ("/api/attachments.upload", True),
+            ("https://test.outline.com:443/upload", True),
+            ("https://storage.example.com/upload", False),
+            ("https://files.test.outline.com/upload", False),
+            ("https://test.outline.com:8443/upload", False),
+            ("http://test.outline.com/upload", False),
+        ],
+    )
+    async def test_upload_attachment_cookie_scoped_to_origin(
+        self, mock_transport, mode, upload_url, send_cookie
+    ):
+        """Send the configured cookie only to same-origin upload targets."""
+        cookie = "session=secret; gateway=token"
+        os.environ["OUTLINE_COOKIE"] = cookie
+        requests = []
+        target_field = "url" if mode == "put" else "uploadUrl"
+
+        def handler(request):
+            requests.append(request)
+            if request.url.path == "/api/attachments.create":
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "mode": mode,
+                            target_field: upload_url,
+                            "attachment": {"id": "att-1"},
+                        }
+                    },
+                )
+            return httpx.Response(204)
+
+        mock_transport(handler)
+        client = OutlineClient()
+        try:
+            await client.upload_attachment("file.txt", b"hello", "text/plain")
+            create_request, upload_request = requests
+            assert create_request.headers["Cookie"] == cookie
+            assert upload_request.method == mode.upper()
+            assert upload_request.headers.get("Cookie") == (
+                cookie if send_cookie else None
+            )
+            assert "Authorization" not in upload_request.headers
+        finally:
+            await OutlineClient.close_pool()
+
+    @pytest.mark.asyncio
     async def test_upload_attachment_post_success(self):
         """Upload uses presigned POST fields and returns an absolute URL."""
         client = OutlineClient()
@@ -975,6 +1026,7 @@ class TestOutlineClient:
         )
         mock_upload.assert_awaited_once_with(
             "https://test.outline.com/api/attachments.upload",
+            headers={},
             data={"key": "uploads/file.txt", "policy": "abc"},
             files={"file": ("file.txt", b"hello", "text/plain")},
             follow_redirects=False,
